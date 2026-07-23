@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Task } from '@/app/types';
 import { LoadingSpinner } from './LoadingSpinner';
-import { Mic, MicOff, Send, AlertCircle, RefreshCw, Sparkles } from 'lucide-react';
+import { Mic, MicOff, Send, AlertCircle, RefreshCw, Sparkles, Loader2 } from 'lucide-react';
 
 interface CaptureScreenProps {
   onTasksParsed: (newTasks: Task[]) => void;
@@ -16,13 +16,49 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
 }) => {
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isCleaningVoice, setIsCleaningVoice] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Voice input state
   const [isListening, setIsListening] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(false);
   const [interimTranscript, setInterimTranscript] = useState('');
+
   const recognitionRef = useRef<any>(null);
+  const rawVoiceBufferRef = useRef<string>('');
+
+  // Function to send raw voice buffer to AI for cleaning & formatting
+  const cleanAndInsertVoiceText = async (rawText: string) => {
+    if (!rawText || !rawText.trim()) return;
+
+    setIsCleaningVoice(true);
+    try {
+      const res = await fetch('/api/clean-transcription', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rawText: rawText.trim() }),
+      });
+
+      const data = await res.json();
+      const cleanedText = data.cleanedText || rawText.trim();
+
+      setInputText((prev) => {
+        const trimmed = prev.trim();
+        if (!trimmed) return cleanedText;
+        return `${trimmed}\n${cleanedText}`;
+      });
+    } catch (err) {
+      console.error('Failed to clean voice text with AI:', err);
+      // Fallback to raw text if AI cleanup fails
+      setInputText((prev) => {
+        const trimmed = prev.trim();
+        if (!trimmed) return rawText.trim();
+        return `${trimmed}\n${rawText.trim()}`;
+      });
+    } finally {
+      setIsCleaningVoice(false);
+    }
+  };
 
   useEffect(() => {
     const SpeechRecognition =
@@ -49,10 +85,9 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
         }
 
         if (finalText) {
-          setInputText((prev) => {
-            const separator = prev && !prev.endsWith(' ') ? ' ' : '';
-            return prev + separator + finalText.trim();
-          });
+          rawVoiceBufferRef.current = rawVoiceBufferRef.current
+            ? `${rawVoiceBufferRef.current} ${finalText.trim()}`
+            : finalText.trim();
           setInterimTranscript('');
         } else {
           setInterimTranscript(interimText);
@@ -63,11 +98,21 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
         console.error('Speech recognition error:', event.error);
         setIsListening(false);
         setInterimTranscript('');
+        const buffer = rawVoiceBufferRef.current;
+        rawVoiceBufferRef.current = '';
+        if (buffer) {
+          cleanAndInsertVoiceText(buffer);
+        }
       };
 
       recognition.onend = () => {
         setIsListening(false);
         setInterimTranscript('');
+        const buffer = rawVoiceBufferRef.current;
+        rawVoiceBufferRef.current = '';
+        if (buffer) {
+          cleanAndInsertVoiceText(buffer);
+        }
       };
 
       recognitionRef.current = recognition;
@@ -75,14 +120,16 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
   }, []);
 
   const toggleListening = () => {
-    if (!speechSupported || !recognitionRef.current) return;
+    if (!speechSupported || !recognitionRef.current || isCleaningVoice) return;
 
     if (isListening) {
       recognitionRef.current.stop();
       setIsListening(false);
-      setInterimTranscript('');
+      // onend callback will handle cleanAndInsertVoiceText
     } else {
       try {
+        rawVoiceBufferRef.current = '';
+        setInterimTranscript('');
         recognitionRef.current.start();
         setIsListening(true);
       } catch (err) {
@@ -93,7 +140,7 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
   };
 
   const handleProcess = async () => {
-    if (!inputText.trim()) return;
+    if (!inputText.trim() || isCleaningVoice) return;
 
     if (isListening && recognitionRef.current) {
       recognitionRef.current.stop();
@@ -155,37 +202,64 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
             <textarea
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder="Напиши все що в голові — AI розкладе по поличках..."
+              placeholder="Напиши або надиктуй голосом — AI впорядкує та розкладе по поличках..."
               className="w-full flex-1 bg-transparent text-[#2D2235] placeholder-[#9B8FA3] text-[15px] resize-none focus:outline-none leading-relaxed font-normal min-h-[200px]"
             />
 
-            {/* Interim voice preview */}
-            {interimTranscript && (
-              <div className="text-[13px] text-[#9B8FA3] italic animate-pulse leading-snug">
-                {interimTranscript}...
+            {/* Voice Status Overlay / Indicators */}
+            {isListening && (
+              <div className="my-2 p-2.5 rounded-xl bg-[#FFF5F7] border border-[#F5E0E7] flex flex-col gap-1 transition-all">
+                <div className="flex items-center gap-2 text-xs font-semibold text-[#E8729B]">
+                  <span className="w-2 h-2 rounded-full bg-[#E8729B] animate-ping shrink-0" />
+                  <span>Слухаю ваш голос... (говоріть завдання)</span>
+                </div>
+                {interimTranscript && (
+                  <p className="text-[13px] text-[#6B5A75] italic leading-snug pl-4">
+                    «{interimTranscript}»
+                  </p>
+                )}
+              </div>
+            )}
+
+            {isCleaningVoice && (
+              <div className="my-2 p-2.5 rounded-xl bg-purple-50 border border-purple-100 flex items-center gap-2 text-xs text-purple-700 font-medium animate-pulse">
+                <Sparkles strokeWidth={1.5} className="w-4 h-4 text-purple-500 animate-spin" />
+                <span>AI перевіряє та покращує розшифровку голосу...</span>
               </div>
             )}
 
             {/* Bottom Bar inside Textarea (Mic + Counter) */}
             <div className="mt-2 pt-2 border-t border-[#F5E0E7] flex items-center justify-between">
               {speechSupported ? (
-                <div className="relative flex items-center">
-                  {isListening && (
-                    <span className="absolute w-10 h-10 rounded-full bg-[#E8729B]/30 animate-ping" />
-                  )}
+                <div className="relative flex items-center gap-2">
                   <button
                     type="button"
                     onClick={toggleListening}
-                    className={`relative z-10 w-9 h-9 rounded-xl flex items-center justify-center transition-all ${isListening
-                        ? 'bg-[#E8729B] text-white shadow-md'
+                    disabled={isCleaningVoice}
+                    className={`relative z-10 h-9 px-3 rounded-xl flex items-center gap-2 text-xs font-semibold transition-all ${
+                      isCleaningVoice
+                        ? 'bg-purple-100 text-purple-600 border border-purple-200 opacity-80 cursor-wait'
+                        : isListening
+                        ? 'bg-[#E8729B] text-white shadow-md animate-pulse'
                         : 'bg-[#FFF5F7] text-[#E8729B] hover:bg-[#F5E0E7] border border-[#F5E0E7]'
-                      }`}
+                    }`}
                     title={isListening ? 'Зупинити запис' : 'Голосове введення'}
                   >
-                    {isListening ? (
-                      <MicOff strokeWidth={1.5} className="w-4 h-4 animate-pulse" />
+                    {isCleaningVoice ? (
+                      <>
+                        <Loader2 strokeWidth={1.5} className="w-4 h-4 animate-spin text-purple-600" />
+                        <span>Обробка AI...</span>
+                      </>
+                    ) : isListening ? (
+                      <>
+                        <MicOff strokeWidth={1.5} className="w-4 h-4 animate-pulse" />
+                        <span>Зупинити запис</span>
+                      </>
                     ) : (
-                      <Mic strokeWidth={1.5} className="w-4 h-4 text-[#E8729B]" />
+                      <>
+                        <Mic strokeWidth={1.5} className="w-4 h-4 text-[#E8729B]" />
+                        <span>Надиктувати голосом</span>
+                      </>
                     )}
                   </button>
                 </div>
@@ -220,11 +294,12 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
           <button
             type="button"
             onClick={handleProcess}
-            disabled={!inputText.trim()}
-            className={`w-full py-3.5 px-5 rounded-[16px] font-semibold text-sm flex items-center justify-center gap-2 transition-all shrink-0 ${inputText.trim()
+            disabled={!inputText.trim() || isCleaningVoice}
+            className={`w-full py-3.5 px-5 rounded-[16px] font-semibold text-sm flex items-center justify-center gap-2 transition-all shrink-0 ${
+              inputText.trim() && !isCleaningVoice
                 ? 'bg-gradient-to-r from-[#E8729B] to-[#D4619A] hover:from-[#d65f88] hover:to-[#c24f88] text-white shadow-[0_4px_16px_rgba(232,114,155,0.25)] active:scale-[0.98]'
                 : 'bg-[#F5E0E7]/60 text-[#9B8FA3] cursor-not-allowed border border-[#F5E0E7]'
-              }`}
+            }`}
           >
             <Sparkles strokeWidth={1.5} className="w-4 h-4" />
             <span>Обробити з AI</span>
