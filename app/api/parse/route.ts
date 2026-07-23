@@ -19,56 +19,46 @@ export async function POST(req: Request) {
       targetDate.setDate(targetDate.getDate() + 1);
     }
     
-    // ISO format dates that Gemini understands perfectly
-    const todayISO = now.toISOString().split('T')[0]; // "2026-07-21"
+    // ISO format dates
+    const todayISO = now.toISOString().split('T')[0];
     const tomorrowISO = new Date(now.getTime() + 86400000).toISOString().split('T')[0];
     const targetISO = targetDate.toISOString().split('T')[0];
     
-    // Day of week in English (Gemini understands better)
+    // Day of week in English
     const dayOfWeek = targetDate.toLocaleDateString('en-US', { weekday: 'long' });
     const currentHour = now.getHours();
     const currentMinute = now.getMinutes();
     const currentTimeStr = `${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')}`;
 
-    // Calculate planning start time
-    let planStartTime: string;
-    if (planFor === 'tomorrow') {
-      planStartTime = '09:00';
+    // Calculate planning start time in minutes from midnight
+    let dayStartMins: number;
+    if (planFor === 'today') {
+      let startMins = currentHour * 60 + currentMinute + 15;
+      dayStartMins = Math.ceil(startMins / 15) * 15;
+      if (dayStartMins < 540) dayStartMins = 540; // 09:00 AM minimum
     } else {
-      // Start from NOW + 15 minutes, rounded up to next 15 min
-      let startMin = currentMinute + 15;
-      let startHour = currentHour;
-      
-      // Round up to nearest 15
-      startMin = Math.ceil(startMin / 15) * 15;
-      
-      while (startMin >= 60) {
-        startHour++;
-        startMin -= 60;
-      }
-      
-      // If it's before 9 AM, start at 9
-      if (startHour < 9) {
-        startHour = 9;
-        startMin = 0;
-      }
-      
-      // If it's after 22, no more tasks today
-      if (startHour >= 22) {
-        startHour = 22;
-        startMin = 0;
-      }
-      
-      planStartTime = `${String(startHour).padStart(2, '0')}:${String(startMin).padStart(2, '0')}`;
+      dayStartMins = 540; // 09:00 AM
     }
 
-    const SYSTEM_PROMPT = `You are a day planner AI. Parse user's chaotic text into structured tasks.
+    const planStartHour = Math.floor(dayStartMins / 60);
+    const planStartMin = dayStartMins % 60;
+    const planStartTimeStr = `${String(planStartHour).padStart(2, '0')}:${String(planStartMin).padStart(2, '0')}`;
 
-CURRENT DATE AND TIME:
-- Right now: ${todayISO} ${currentTimeStr} (${now.toLocaleDateString('en-US', { weekday: 'long' })})
+    const SYSTEM_PROMPT = `You are an expert day planner AI. Parse user's text into structured tasks.
+
+CURRENT LOCAL TIME AND DATE:
+- Right now local time: ${currentTimeStr} (${todayISO}, ${now.toLocaleDateString('en-US', { weekday: 'long' })})
 - Today's date: ${todayISO}
 - Tomorrow's date: ${tomorrowISO}
-- Planning for: ${targetISO} (${dayOfWeek})
+- Planning target day: ${planFor.toUpperCase()} (${targetISO}, ${dayOfWeek})
+- EARLIEST ALLOWED START TIME FOR TASKS TODAY: ${planStartTimeStr}
+
+CRITICAL RULES FOR TIME PLANNING:
+1. Current time right now is ${currentTimeStr}.
+2. When planning for TODAY (${todayISO}), the morning/early hours may HAVE ALREADY PASSED!
+   - NEVER suggest 'early_morning' (09:00) or 'morning' (10:00) if current time (${currentTimeStr}) is past 12:00!
+   - If current time is ${currentTimeStr}, use 'afternoon', 'evening', 'before_sleep', or 'flexible' so all tasks start AT OR AFTER ${planStartTimeStr}!
+3. If user mentions a specific fixed time today that is already in the past (e.g. user says "дзвінок о 11:30" but now it's ${currentTimeStr}), set deadline to null and timeHint to 'afternoon' or 'flexible' so it gets scheduled NOW (${planStartTimeStr}), NOT in the past!
 
 OUTPUT FORMAT: Return ONLY a valid JSON array. No markdown, no explanation.
 
@@ -83,45 +73,20 @@ For each task return:
 }
 
 ESTIMATED MINUTES GUIDELINES:
-- estimatedMinutes: realistic duration in minutes.
-  - Phone call, quick reply, paying bills, signing up: 15
-  - Short errand (pharmacy, post office, picking up package): 30
-  - Shopping, gym/workout: 60
-  - Meeting, standup, sync, presentation: 60
-  - Report writing, focused deep work: 90
-  - Large project work, complex analysis, code review: 60-90
-  
-  Do NOT assume short durations for meetings or standups. Default meeting/standup to 60 minutes unless user specifies otherwise.
-  When in doubt, use 30-60 minutes, NOT 15.
-
-TIME HINT GUIDELINES:
-For each task also return timeHint based on user intent:
-- "early_morning" — if text says "з ранку", "з самого ранку", "першим ділом", "зранку", "рано" → schedule at 09:00
-- "morning" — if text says "до обіду", "вранці" → schedule 09:00-12:00
-- "midday" — if text says "в обід", "під час обіду" → schedule 12:00-13:00
-- "afternoon" — if text says "після обіду", "після обідня" → schedule 13:00-17:00
-- "evening" — if text says "ввечері", "увечері", "вечором" → schedule 18:00-20:00
-- "before_sleep" — if text says "перед сном" → schedule 21:00
-- "fixed" — if specific time is mentioned (о 10:00, в 14:30)
-- "flexible" — no time preference mentioned
-
-IMPORTANT: Respect the ORDER from user's text. If user says "спершу X, потім Y" — X gets earlier timeHint than Y. If user says "з ранку X, о 10:00 Y" — X is "early_morning" (09:00), Y is "fixed" (10:00). X MUST be before Y.
+- Realistic duration: Phone call (15), Short errand (30), Meeting/Standup (60), Deep work/Report (90).
+- Default meeting/standup to 60 minutes unless user specifies otherwise.
 
 STRICT RULES FOR deadline:
 - ALL dates must use year 2026 and month 07 (July) unless explicitly stated otherwise.
-- "до вівторка" = next Tuesday from ${todayISO}, format: "${todayISO.substring(0, 8)}22T23:59:00"
-- "до середи" = next Wednesday from ${todayISO}
+- "до вівторка" = next Tuesday from ${todayISO}
 - "завтра" = ${tomorrowISO}T23:59:00
-- "до 25 числа" = ${todayISO.substring(0, 8)}25T23:59:00
 - "о 15:00" = ${targetISO}T15:00:00
-- If no date mentioned: null
-- NEVER use months like May (05), March (03) etc. Current month is July (07).
 
-Example input: "звіт для боса терміново, зум о 14:30, аптека, контракт до середи"
+Example input (when current time is ${currentTimeStr}, planning for today): "звіт для боса терміново, зум о 15:30, аптека, контракт до середи"
 Example output:
 [
-  {"title": "Підготувати звіт для боса", "priority": "high", "estimatedMinutes": 90, "deadline": null, "tags": ["work"], "timeHint": "early_morning"},
-  {"title": "Зум-зустріч", "priority": "high", "estimatedMinutes": 60, "deadline": "${targetISO}T14:30:00", "tags": ["work"], "timeHint": "fixed"},
+  {"title": "Підготувати звіт для боса", "priority": "high", "estimatedMinutes": 60, "deadline": null, "tags": ["work"], "timeHint": "afternoon"},
+  {"title": "Зум-зустріч", "priority": "high", "estimatedMinutes": 60, "deadline": "${targetISO}T15:30:00", "tags": ["work"], "timeHint": "fixed"},
   {"title": "Сходити в аптеку", "priority": "medium", "estimatedMinutes": 30, "deadline": null, "tags": ["health", "errands"], "timeHint": "evening"},
   {"title": "Перевірити контракт", "priority": "high", "estimatedMinutes": 60, "deadline": "${todayISO.substring(0, 8)}23T23:59:00", "tags": ["work"], "timeHint": "flexible"}
 ]`;
@@ -130,7 +95,7 @@ Example output:
 
     if (!apiKey) {
       console.warn('GEMINI_API_KEY is not set. Using fallback heuristic parser.');
-      const fallbackTasks = generateFallbackTasks(userInput, currentHour, currentMinute);
+      const fallbackTasks = generateFallbackTasks(userInput, dayStartMins);
       return NextResponse.json({ tasks: fallbackTasks });
     }
 
@@ -157,7 +122,7 @@ Example output:
                 },
               ],
               generationConfig: {
-                temperature: 0.3,
+                temperature: 0.2,
                 responseMimeType: 'application/json',
               },
             }),
@@ -208,7 +173,6 @@ Example output:
     }
 
     const tasks: Task[] = parsedList.map((item, index) => {
-      // Validate deadline — fix wrong months
       let deadline = item.deadline || undefined;
       if (deadline && typeof deadline === 'string') {
         const deadlineDate = new Date(deadline);
@@ -250,31 +214,25 @@ Example output:
       'before_sleep': 1260,  // 21:00
     };
 
-    // Determine day start
-    let dayStartMins: number;
-    if (planFor === 'today') {
-      dayStartMins = currentHour * 60 + currentMinute + 15;
-      dayStartMins = Math.ceil(dayStartMins / 15) * 15;
-      if (dayStartMins < 540) dayStartMins = 540;
-    } else {
-      dayStartMins = 540; // 09:00
-    }
-
-    // Step 1: Categorize tasks
     interface ScheduleItem {
       task: typeof tasks[0];
-      preferredStart: number;  // preferred start in minutes
+      preferredStart: number;
       isFixed: boolean;
     }
 
     const scheduleItems: ScheduleItem[] = tasks.map(task => {
-      // Fixed time from deadline (like "зум о 14:30")
+      // Fixed time from deadline (like "зум о 15:30")
       if (task.deadline && task.deadline.includes('T')) {
         const timePart = task.deadline.split('T')[1];
         if (timePart && !timePart.startsWith('23:59')) {
           const [fh, fm] = timePart.substring(0, 5).split(':').map(Number);
           if (fh >= 0 && fh <= 23) {
-            return { task, preferredStart: fh * 60 + fm, isFixed: true };
+            let start = fh * 60 + fm;
+            // ENFORCE: If planning for TODAY, fixed start time cannot be in the PAST!
+            if (planFor === 'today' && start < dayStartMins) {
+              start = dayStartMins;
+            }
+            return { task, preferredStart: start, isFixed: true };
           }
         }
       }
@@ -286,50 +244,43 @@ Example output:
         return { task, preferredStart: preferred, isFixed: false };
       }
 
-      // Flexible — no preference
-      return { task, preferredStart: 9999, isFixed: false };
+      // Flexible — start from dayStartMins
+      return { task, preferredStart: dayStartMins, isFixed: false };
     });
 
-    // Step 2: Sort by preferredStart (earliest first), fixed tasks keep their time
+    // Sort schedule items by preferred start time
     scheduleItems.sort((a, b) => {
       if (a.isFixed && !b.isFixed) return -1;
       if (!a.isFixed && b.isFixed) return 1;
       if (a.preferredStart !== b.preferredStart) return a.preferredStart - b.preferredStart;
-      // Same preference — higher priority first
       const po: Record<string, number> = { high: 0, medium: 1, low: 2 };
-      return (po[a.task.priority] || 1) - (po[a.task.priority] || 1);
+      return (po[a.task.priority] || 1) - (po[b.task.priority] || 1);
     });
 
-    // Step 3: Place fixed tasks first, then fill flexible around them
+    // Place fixed tasks first, then fill non-fixed tasks around them
     const occupied: { start: number; end: number }[] = [];
 
-    // Place fixed tasks
     scheduleItems.filter(s => s.isFixed).forEach(s => {
       const start = s.preferredStart;
       s.task.scheduledTime = `${String(Math.floor(start / 60)).padStart(2, '0')}:${String(start % 60).padStart(2, '0')}`;
       occupied.push({ start, end: start + (s.task.estimatedMinutes || 30) });
     });
 
-    // Sort occupied by start time
     occupied.sort((a, b) => a.start - b.start);
 
-    // Place non-fixed tasks in available slots
     let cursor = dayStartMins;
 
     scheduleItems.filter(s => !s.isFixed).forEach(s => {
       const duration = s.task.estimatedMinutes || 30;
-      
-      // Try preferred start first
-      let targetStart = Math.max(s.preferredStart === 9999 ? cursor : s.preferredStart, cursor);
+      let targetStart = Math.max(s.preferredStart, cursor);
 
-      // Find slot that doesn't collide
       let placed = false;
       let attempts = 0;
       while (!placed && attempts < 50) {
         let collides = false;
         for (const slot of occupied) {
           if (targetStart < slot.end && (targetStart + duration) > slot.start) {
-            targetStart = slot.end + 15; // jump past + break
+            targetStart = slot.end + 15; // jump past + 15m break
             collides = true;
             break;
           }
@@ -361,11 +312,10 @@ Example output:
   }
 }
 
-// Strict fallback generator
-function generateFallbackTasks(input: string, startH: number, startM: number): Task[] {
+// Fallback generator respecting current time
+function generateFallbackTasks(input: string, dayStartMins: number): Task[] {
   const lines = input.split(/[\n,.;]+/).filter((line) => line.trim().length > 0);
-  let h = Math.max(9, startH);
-  let m = 0;
+  let currentStart = dayStartMins;
 
   return lines.map((line, idx) => {
     const text = line.trim();
@@ -377,14 +327,11 @@ function generateFallbackTasks(input: string, startH: number, startM: number): T
     }
 
     const duration = [15, 30, 45, 60][idx % 4];
-    const validH = h % 24;
-    const sched = `${String(validH).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    const h = Math.min(Math.floor(currentStart / 60), 22);
+    const m = currentStart % 60;
+    const sched = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
     
-    m += duration + 15;
-    while (m >= 60) {
-      h = (h + 1) % 24;
-      m -= 60;
-    }
+    currentStart += duration + 15;
 
     return {
       id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${idx}`,
