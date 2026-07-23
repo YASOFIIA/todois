@@ -15,6 +15,7 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
   onNavigateToInbox,
 }) => {
   const [inputText, setInputText] = useState('');
+  const [planFor, setPlanFor] = useState<'today' | 'tomorrow'>('today');
   const [isLoading, setIsLoading] = useState(false);
   const [isCleaningVoice, setIsCleaningVoice] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -157,6 +158,7 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: inputText,
+          planFor,
           clientHour: new Date().getHours(),
           clientMinute: new Date().getMinutes(),
           clientDate: new Date().toLocaleDateString('sv-SE'), // "2026-07-23" in local tz
@@ -294,6 +296,32 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
               </button>
             </div>
           )}
+
+          {/* Day Selector */}
+          <div className="flex gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setPlanFor('today')}
+              className={`flex-1 py-2.5 px-4 rounded-[12px] text-[13px] font-semibold transition-all ${
+                planFor === 'today'
+                  ? 'bg-[#E8729B] text-white shadow-sm'
+                  : 'bg-[#FFF5F7] text-[#9B8FA3] border border-[#F5E0E7] hover:bg-[#F5E0E7]'
+              }`}
+            >
+              📅 На сьогодні
+            </button>
+            <button
+              type="button"
+              onClick={() => setPlanFor('tomorrow')}
+              className={`flex-1 py-2.5 px-4 rounded-[12px] text-[13px] font-semibold transition-all ${
+                planFor === 'tomorrow'
+                  ? 'bg-[#E8729B] text-white shadow-sm'
+                  : 'bg-[#FFF5F7] text-[#9B8FA3] border border-[#F5E0E7] hover:bg-[#F5E0E7]'
+              }`}
+            >
+              🌅 На завтра
+            </button>
+          </div>
 
           {/* Process Submit Button */}
           <button
