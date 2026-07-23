@@ -15,13 +15,13 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
   onNavigateToInbox,
 }) => {
   const [inputText, setInputText] = useState('');
-  const [planFor, setPlanFor] = useState<'today' | 'tomorrow'>('today');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Voice input state
   const [isListening, setIsListening] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(false);
+  const [interimTranscript, setInterimTranscript] = useState('');
   const recognitionRef = useRef<any>(null);
 
   useEffect(() => {
@@ -36,25 +36,38 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
       recognition.lang = 'uk-UA';
 
       recognition.onresult = (event: any) => {
-        let transcript = '';
+        let finalText = '';
+        let interimText = '';
+
         for (let i = event.resultIndex; i < event.results.length; i++) {
-          transcript += event.results[i][0].transcript;
+          const text = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalText += text;
+          } else {
+            interimText += text;
+          }
         }
-        if (transcript) {
+
+        if (finalText) {
           setInputText((prev) => {
             const separator = prev && !prev.endsWith(' ') ? ' ' : '';
-            return prev + separator + transcript;
+            return prev + separator + finalText.trim();
           });
+          setInterimTranscript('');
+        } else {
+          setInterimTranscript(interimText);
         }
       };
 
       recognition.onerror = (event: any) => {
         console.error('Speech recognition error:', event.error);
         setIsListening(false);
+        setInterimTranscript('');
       };
 
       recognition.onend = () => {
         setIsListening(false);
+        setInterimTranscript('');
       };
 
       recognitionRef.current = recognition;
@@ -67,6 +80,7 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
     if (isListening) {
       recognitionRef.current.stop();
       setIsListening(false);
+      setInterimTranscript('');
     } else {
       try {
         recognitionRef.current.start();
@@ -84,6 +98,7 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
     if (isListening && recognitionRef.current) {
       recognitionRef.current.stop();
       setIsListening(false);
+      setInterimTranscript('');
     }
 
     setIsLoading(true);
@@ -93,7 +108,7 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
       const res = await fetch('/api/parse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: inputText, planFor }),
+        body: JSON.stringify({ text: inputText }),
       });
 
       const data = await res.json();
@@ -144,6 +159,13 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
               className="w-full flex-1 bg-transparent text-[#2D2235] placeholder-[#9B8FA3] text-[15px] resize-none focus:outline-none leading-relaxed font-normal min-h-[200px]"
             />
 
+            {/* Interim voice preview */}
+            {interimTranscript && (
+              <div className="text-[13px] text-[#9B8FA3] italic animate-pulse leading-snug">
+                {interimTranscript}...
+              </div>
+            )}
+
             {/* Bottom Bar inside Textarea (Mic + Counter) */}
             <div className="mt-2 pt-2 border-t border-[#F5E0E7] flex items-center justify-between">
               {speechSupported ? (
@@ -154,11 +176,10 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
                   <button
                     type="button"
                     onClick={toggleListening}
-                    className={`relative z-10 w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
-                      isListening
+                    className={`relative z-10 w-9 h-9 rounded-xl flex items-center justify-center transition-all ${isListening
                         ? 'bg-[#E8729B] text-white shadow-md'
                         : 'bg-[#FFF5F7] text-[#E8729B] hover:bg-[#F5E0E7] border border-[#F5E0E7]'
-                    }`}
+                      }`}
                     title={isListening ? 'Зупинити запис' : 'Голосове введення'}
                   >
                     {isListening ? (
@@ -195,42 +216,15 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
             </div>
           )}
 
-          {/* Day Selector */}
-          <div className="flex gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => setPlanFor('today')}
-              className={`flex-1 py-2.5 px-4 rounded-[12px] text-[13px] font-semibold transition-all ${
-                planFor === 'today'
-                  ? 'bg-[#E8729B] text-white shadow-sm'
-                  : 'bg-[#FFF5F7] text-[#9B8FA3] border border-[#F5E0E7] hover:bg-[#F5E0E7]'
-              }`}
-            >
-              📅 На сьогодні
-            </button>
-            <button
-              type="button"
-              onClick={() => setPlanFor('tomorrow')}
-              className={`flex-1 py-2.5 px-4 rounded-[12px] text-[13px] font-semibold transition-all ${
-                planFor === 'tomorrow'
-                  ? 'bg-[#E8729B] text-white shadow-sm'
-                  : 'bg-[#FFF5F7] text-[#9B8FA3] border border-[#F5E0E7] hover:bg-[#F5E0E7]'
-              }`}
-            >
-              🌅 На завтра
-            </button>
-          </div>
-
           {/* Process Submit Button */}
           <button
             type="button"
             onClick={handleProcess}
             disabled={!inputText.trim()}
-            className={`w-full py-3.5 px-5 rounded-[16px] font-semibold text-sm flex items-center justify-center gap-2 transition-all shrink-0 ${
-              inputText.trim()
+            className={`w-full py-3.5 px-5 rounded-[16px] font-semibold text-sm flex items-center justify-center gap-2 transition-all shrink-0 ${inputText.trim()
                 ? 'bg-gradient-to-r from-[#E8729B] to-[#D4619A] hover:from-[#d65f88] hover:to-[#c24f88] text-white shadow-[0_4px_16px_rgba(232,114,155,0.25)] active:scale-[0.98]'
                 : 'bg-[#F5E0E7]/60 text-[#9B8FA3] cursor-not-allowed border border-[#F5E0E7]'
-            }`}
+              }`}
           >
             <Sparkles strokeWidth={1.5} className="w-4 h-4" />
             <span>Обробити з AI</span>
