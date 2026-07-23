@@ -155,7 +155,12 @@ export const CaptureScreen: React.FC<CaptureScreenProps> = ({
       const res = await fetch('/api/parse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: inputText }),
+        body: JSON.stringify({
+          text: inputText,
+          clientHour: new Date().getHours(),
+          clientMinute: new Date().getMinutes(),
+          clientDate: new Date().toLocaleDateString('sv-SE'), // "2026-07-23" in local tz
+        }),
       });
 
       const data = await res.json();

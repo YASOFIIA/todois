@@ -7,27 +7,29 @@ export async function POST(req: Request) {
     const userInput = body.text;
     const planFor: 'today' | 'tomorrow' = body.planFor || 'today';
 
+    // Use CLIENT's local time (browser sends it), not server UTC
+    const clientHour: number = typeof body.clientHour === 'number' ? body.clientHour : new Date().getHours();
+    const clientMinute: number = typeof body.clientMinute === 'number' ? body.clientMinute : new Date().getMinutes();
+    const clientDateStr: string = body.clientDate || new Date().toISOString().split('T')[0]; // "2026-07-23"
+
     if (!userInput || typeof userInput !== 'string' || !userInput.trim()) {
       return NextResponse.json({ error: 'Текст порожній' }, { status: 400 });
     }
 
-    const now = new Date();
+    // Use client's local date for all date calculations
+    const todayISO = clientDateStr; // e.g. "2026-07-23"
+    const todayParts = todayISO.split('-').map(Number);
+    const tomorrowDate = new Date(todayParts[0], todayParts[1] - 1, todayParts[2] + 1);
+    const tomorrowISO = tomorrowDate.toISOString().split('T')[0];
     
-    // Target date based on planFor
-    const targetDate = new Date(now);
-    if (planFor === 'tomorrow') {
-      targetDate.setDate(targetDate.getDate() + 1);
-    }
+    const targetISO = planFor === 'tomorrow' ? tomorrowISO : todayISO;
+    const targetJSDate = planFor === 'tomorrow' ? tomorrowDate : new Date(todayParts[0], todayParts[1] - 1, todayParts[2]);
     
-    // ISO format dates
-    const todayISO = now.toISOString().split('T')[0];
-    const tomorrowISO = new Date(now.getTime() + 86400000).toISOString().split('T')[0];
-    const targetISO = targetDate.toISOString().split('T')[0];
-    
-    // Day of week in English
-    const dayOfWeek = targetDate.toLocaleDateString('en-US', { weekday: 'long' });
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
+    // Day of week
+    const dayOfWeek = targetJSDate.toLocaleDateString('en-US', { weekday: 'long' });
+    const todayDayOfWeek = new Date(todayParts[0], todayParts[1] - 1, todayParts[2]).toLocaleDateString('en-US', { weekday: 'long' });
+    const currentHour = clientHour;
+    const currentMinute = clientMinute;
     const currentTimeStr = `${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')}`;
 
     // Calculate planning start time in minutes from midnight
@@ -47,7 +49,7 @@ export async function POST(req: Request) {
     const SYSTEM_PROMPT = `You are an expert day planner AI. Parse user's text into structured tasks.
 
 CURRENT LOCAL TIME AND DATE:
-- Right now local time: ${currentTimeStr} (${todayISO}, ${now.toLocaleDateString('en-US', { weekday: 'long' })})
+- Right now local time: ${currentTimeStr} (${todayISO}, ${todayDayOfWeek})
 - Today's date: ${todayISO}
 - Tomorrow's date: ${tomorrowISO}
 - Planning target day: ${planFor.toUpperCase()} (${targetISO}, ${dayOfWeek})
